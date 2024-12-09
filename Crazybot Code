@@ -1,0 +1,156 @@
+from discord.ext import commands, tasks
+import discord
+import aiohttp
+import asyncio
+import random
+
+# Set up the bot with a command prefix
+intents = discord.Intents.default()
+intents.messages = True #  For message-related events
+intents.message_content = True  # For message content
+intents.members = True  # For member join events
+bot = commands.Bot(command_prefix='!', intents=intents)
+
+# Global variable to store the channel for daily facts
+daily_facts_channel = None
+
+async def fetch_random_fact():
+    """Fetch a random fact from an API"""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get('https://uselessfacts.jsph.pl/random.json?language=en') as response:
+                if response.status == 200:
+                    data = await response.json()
+                    return data['text']
+                else:
+                    return "Couldn't fetch a fact today. Maybe the fact machine is sleeping!"
+    except Exception as e:
+        print(f"Error fetching fact: {e}")
+        return "Oops! Something went wrong fetching a fact."
+
+@bot.command()
+async def set_facts_channel(ctx):
+    """Set the channel for daily facts"""
+    global daily_facts_channel
+    daily_facts_channel = ctx.channel
+    await ctx.send(f"Daily facts will now be posted in {ctx.channel.mention}")
+    # Start the daily facts task if not already running
+    if not daily_fact.is_running():
+        daily_fact.start()
+
+@tasks.loop(hours=24)
+async def daily_fact():
+    """Send a random fact to the designated channel daily"""
+    global daily_facts_channel
+    if daily_facts_channel:
+        try:
+            fact = await fetch_random_fact()
+            await daily_facts_channel.send(f"🌟 Daily Crazy Fact: {fact}")
+        except Exception as e:
+            print(f"Error sending daily fact: {e}")
+
+@daily_fact.before_loop
+async def before_daily_fact():
+    """Wait for the bot to be ready before starting the daily fact task"""
+    await bot.wait_until_ready()
+
+@bot.event
+async def on_ready():
+    print(f'Crazybot is ready! Logged in as CrazyBot')
+    
+    # Automatically set the daily facts channel to "crazy hangout spot"
+    global daily_facts_channel
+    for channel in bot.get_all_channels():
+        if channel.name.lower() == "crazy-hangout-spot":
+            daily_facts_channel = channel
+            print(f"Daily facts will be posted in {channel.name}")
+            # Start the daily facts task
+            if not daily_fact.is_running():
+                daily_fact.start()
+            break
+
+@bot.event
+async def on_member_join(member):
+    # Get the Crazy Green Shells role
+    role = discord.utils.get(member.guild.roles, name="Crazy Green Shells")
+    if role:
+        try:
+            await member.add_roles(role)
+            print(f"Gave {member.name} the Crazy Green Shells role")
+        except discord.Forbidden:
+            print(f"Failed to give role to {member.name} - Missing permissions")
+        except discord.HTTPException:
+            print(f"Failed to give role to {member.name} - HTTP Exception")
+    else:
+        print("Crazy Green Shells role not found")
+    
+    # Send welcome message to the default channel
+    welcome_channel = member.guild.system_channel or member.guild.text_channels[0]
+    if welcome_channel:
+        welcome_message = f"Hey, {member.mention} thanks For joining the server! Glad to have you! Feel free to stream whatever game you fancy! We're all friendly here so don't be shy!"
+        await welcome_channel.send(welcome_message)
+
+@bot.command()
+async def yay(ctx):
+    await ctx.send('Yay!')
+
+@bot.command()
+async def crazy(ctx):
+    await ctx.send('Crazybot is in the house!')
+
+@bot.command()
+async def wassup(ctx):
+    await ctx.send('Not much! Thanks for asking!')
+
+@bot.command()
+async def repeat(ctx, *, message: str):
+    await ctx.send(message)    
+
+@bot.command()
+@commands.has_permissions(kick_members=True)
+async def kick(ctx, member: discord.Member, *, reason=None):
+    """Kick a member from the server with optional reason"""
+    try:
+        # Check if the bot has permissions to kick
+        if not ctx.guild.me.guild_permissions.kick_members:
+            await ctx.send("I don't have permission to kick members.")
+            return
+        
+        # Kick the member
+        await member.kick(reason=reason)
+        
+        # Send a confirmation message
+        kick_message = f"{member.mention} has been kicked"
+        if reason:
+            kick_message += f" for: {reason}"
+        await ctx.send(kick_message)
+    
+    except discord.Forbidden:
+        await ctx.send("I don't have permission to kick this member.")
+    except discord.HTTPException:
+        await ctx.send("Failed to kick the member. Please try again.")
+
+@kick.error
+async def kick_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send("You don't have permission to kick members.")
+    elif isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send("Please specify a member to kick.")
+
+@bot.command()
+async def kart(ctx):
+    await ctx.send('@everyone Who wants to play Kart?')
+
+
+@bot.command()
+async def smash(ctx):
+    await ctx.send('@everyone Who wants to play Smash?')
+
+
+@bot.command()
+async def party(ctx):
+    await ctx.send('@everyone Who wants to play Party?')
+
+
+# Run the bot with the token
+bot.run('INSERT_YOUR_DISCORD_BOT_TOKEN_HERE')
