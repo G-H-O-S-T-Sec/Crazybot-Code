@@ -18,3 +18,6 @@ A fun Discord bot with features like:
 - Posts daily random facts in the "crazy-hangout-spot" channel
 - Kick command with permission checks
 - Game invitation commands for Kart, Smash, and Party
+  
+Contributors:
+Anon23261
