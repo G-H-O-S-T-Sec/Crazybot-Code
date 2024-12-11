@@ -1,18 +1,72 @@
-from discord.ext import commands, tasks
-import discord
+# Ensure correct Discord library imports
+import sys
+import traceback
+import pytz
+
+try:
+    import discord
+    from discord.ext import commands, tasks
+    print(f"Discord.py version: {discord.__version__}")
+except ImportError as e:
+    print(f"Failed to import Discord library: {e}")
+    sys.exit(1)
+
 import aiohttp
 import asyncio
 import random
+from datetime import datetime
+
+# Verify Discord library functionality
+def verify_discord_library():
+    try:
+        # Check basic Discord functionality
+        print("Verifying Discord library...")
+        
+        # Check if core classes exist
+        assert hasattr(discord, 'Client'), "Discord Client class not found"
+        assert hasattr(discord, 'Intents'), "Discord Intents class not found"
+        
+        print("Discord library verification passed.")
+    except AssertionError as e:
+        print(f"Discord library verification failed: {e}")
+        sys.exit(1)
+
+# Call verification function
+verify_discord_library()
 
 # Set up the bot with a command prefix
-intents = discord.Intents.default()
-intents.messages = True #  For message-related events
-intents.message_content = True  # For message content
-intents.members = True  # For member join events
-bot = commands.Bot(command_prefix='!', intents=intents)
+intents = discord.Intents.all()  # Enable all intents for maximum functionality
+intents.members = True  # Explicitly enable member intents
+intents.message_content = True  # Explicitly enable message content intent
+
+# Create bot with more specific configuration
+bot = commands.Bot(
+    command_prefix='!', 
+    intents=intents, 
+    help_command=None,  # Disable default help to prevent potential issues
+    case_insensitive=True  # Make commands case-insensitive
+)
 
 # Global variable to store the channel for daily facts
-daily_facts_channel = None
+FACTS_CHANNEL_ID = None
+
+# Diagnostic function for send method
+def diagnose_send_method(obj):
+    """
+    Diagnose potential issues with the send method
+    """
+    print("\n--- Send Method Diagnosis ---")
+    print(f"Object type: {type(obj)}")
+    
+    # Check if send method exists
+    if hasattr(obj, 'send'):
+        print("Send method exists")
+        print(f"Send method type: {type(obj.send)}")
+    else:
+        print("WARNING: Send method NOT found!")
+        print("Attributes available:", dir(obj))
+    
+    print("--- End of Diagnosis ---\n")
 
 async def fetch_random_fact():
     """Fetch a random fact from an API"""
@@ -31,23 +85,61 @@ async def fetch_random_fact():
 @bot.command()
 async def set_facts_channel(ctx):
     """Set the channel for daily facts"""
-    global daily_facts_channel
-    daily_facts_channel = ctx.channel
+    global FACTS_CHANNEL_ID
+    FACTS_CHANNEL_ID = ctx.channel.id
     await ctx.send(f"Daily facts will now be posted in {ctx.channel.mention}")
     # Start the daily facts task if not already running
     if not daily_fact.is_running():
         daily_fact.start()
 
-@tasks.loop(hours=24)
+last_sent = {'morning': False, 'evening': False}
+
+# Define the timezone for the user's local timezone
+import datetime
+import pytz
+from tzlocal import get_localzone
+
+LOCAL_TIMEZONE = get_localzone()
+
+@tasks.loop(minutes=1)  # Check every minute
 async def daily_fact():
-    """Send a random fact to the designated channel daily"""
-    global daily_facts_channel
-    if daily_facts_channel:
-        try:
+    # Check if a facts channel is set
+    if FACTS_CHANNEL_ID is None:
+        print("FACTS_CHANNEL_ID is None. Cannot send daily fact.")
+        return
+
+    # Get the actual text channel using the channel ID
+    facts_channel = bot.get_channel(FACTS_CHANNEL_ID)
+    
+    # Verify that we have a valid text channel
+    if facts_channel is None:
+        print(f"Could not find channel with ID {FACTS_CHANNEL_ID}")
+        return
+    
+    if not isinstance(facts_channel, discord.TextChannel):
+        print(f"Channel {FACTS_CHANNEL_ID} is not a text channel")
+        return
+
+    # Define specific posting times
+    posting_times = [datetime.time(8, 0), datetime.time(20, 0)]  # 8 AM and 8 PM
+    current_time = datetime.datetime.now(LOCAL_TIMEZONE).time()  # Get the current time in the user's local timezone
+
+    # Check if the current time matches any of the posting times
+    global last_sent
+    if current_time in posting_times:
+        if current_time == posting_times[0] and not last_sent['morning']:
             fact = await fetch_random_fact()
-            await daily_facts_channel.send(f"🌟 Daily Crazy Fact: {fact}")
-        except Exception as e:
-            print(f"Error sending daily fact: {e}")
+            await facts_channel.send(f"🌟 Daily Fact: {fact}")
+            last_sent['morning'] = True
+        elif current_time == posting_times[1] and not last_sent['evening']:
+            fact = await fetch_random_fact()
+            await facts_channel.send(f"🌟 Daily Fact: {fact}")
+            last_sent['evening'] = True
+    else:
+        # Reset the flags at midnight
+        if current_time == datetime.time(0, 0):
+            last_sent['morning'] = False
+            last_sent['evening'] = False
 
 @daily_fact.before_loop
 async def before_daily_fact():
@@ -58,16 +150,17 @@ async def before_daily_fact():
 async def on_ready():
     print(f'Crazybot is ready! Logged in as CrazyBot')
     
-    # Automatically set the daily facts channel to "crazy hangout spot"
-    global daily_facts_channel
+    # Automatically set the daily facts channel to "crazy-hangout-spot"
+    global FACTS_CHANNEL_ID
     for channel in bot.get_all_channels():
-        if channel.name.lower() == "crazy-hangout-spot":
-            daily_facts_channel = channel
-            print(f"Daily facts will be posted in {channel.name}")
-            # Start the daily facts task
-            if not daily_fact.is_running():
-                daily_fact.start()
+        if channel.name.lower() == 'crazy-hangout-spot':
+            FACTS_CHANNEL_ID = channel.id
+            print(f"Daily facts channel set to: {channel.name}")
             break
+    
+    # Start the daily facts task if a channel was found
+    if FACTS_CHANNEL_ID is not None:
+        daily_fact.start()
 
 @bot.event
 async def on_member_join(member):
@@ -85,26 +178,43 @@ async def on_member_join(member):
         print("Crazy Green Shells role not found")
     
     # Send welcome message to the default channel
-    welcome_channel = member.guild.system_channel or member.guild.text_channels[0]
-    if welcome_channel:
-        welcome_message = f"Hey, {member.mention} thanks For joining the server! Glad to have you! Feel free to stream whatever game you fancy! We're all friendly here so don't be shy!"
-        await welcome_channel.send(welcome_message)
+    try:
+        welcome_channel = member.guild.system_channel or (member.guild.text_channels[0] if member.guild.text_channels else None)
+        if welcome_channel:
+            welcome_message = f"Hey, {member.mention} thanks For joining the server! Glad to have you! Feel free to stream whatever game you fancy! We're all friendly here so don't be shy!"
+            await welcome_channel.send(welcome_message)
+        else:
+            print("No suitable channel found to send welcome message")
+    except Exception as e:
+        print(f"Error sending welcome message: {e}")
 
 @bot.command()
 async def yay(ctx):
-    await ctx.send('Yay!')
+    try:
+        await ctx.send('Yay!')
+    except Exception as e:
+        print(f"Error sending yay message: {e}")
 
 @bot.command()
 async def crazy(ctx):
-    await ctx.send('Crazybot is in the house!')
+    try:
+        await ctx.send('Crazybot is in the house!')
+    except Exception as e:
+        print(f"Error sending crazy message: {e}")
 
 @bot.command()
 async def wassup(ctx):
-    await ctx.send('Not much! Thanks for asking!')
+    try:
+        await ctx.send('Not much! Thanks for asking!')
+    except Exception as e:
+        print(f"Error sending wassup message: {e}")
 
 @bot.command()
 async def repeat(ctx, *, message: str):
-    await ctx.send(message)    
+    try:
+        await ctx.send(message)
+    except Exception as e:
+        print(f"Error sending repeat message: {e}")
 
 @bot.command()
 @commands.has_permissions(kick_members=True)
@@ -113,7 +223,10 @@ async def kick(ctx, member: discord.Member, *, reason=None):
     try:
         # Check if the bot has permissions to kick
         if not ctx.guild.me.guild_permissions.kick_members:
-            await ctx.send("I don't have permission to kick members.")
+            try:
+                await ctx.send("I don't have permission to kick members.")
+            except:
+                print("Failed to send permission denied message")
             return
         
         # Kick the member
@@ -123,33 +236,95 @@ async def kick(ctx, member: discord.Member, *, reason=None):
         kick_message = f"{member.mention} has been kicked"
         if reason:
             kick_message += f" for: {reason}"
-        await ctx.send(kick_message)
+        try:
+            await ctx.send(kick_message)
+        except:
+            print(f"Failed to send kick confirmation message: {kick_message}")
     
     except discord.Forbidden:
-        await ctx.send("I don't have permission to kick this member.")
+        try:
+            await ctx.send("I don't have permission to kick this member.")
+        except:
+            print("Failed to send kick forbidden message")
     except discord.HTTPException:
-        await ctx.send("Failed to kick the member. Please try again.")
+        try:
+            await ctx.send("Failed to kick the member. Please try again.")
+        except:
+            print("Failed to send kick HTTP exception message")
 
 @kick.error
 async def kick_error(ctx, error):
-    if isinstance(error, commands.MissingPermissions):
-        await ctx.send("You don't have permission to kick members.")
-    elif isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send("Please specify a member to kick.")
+    try:
+        if isinstance(error, commands.MissingPermissions):
+            await ctx.send("You don't have permission to kick members.")
+        elif isinstance(error, commands.MissingRequiredArgument):
+            await ctx.send("Please specify a member to kick.")
+    except Exception as e:
+        print(f"Error in kick_error handler: {e}")
 
 @bot.command()
 async def kart(ctx):
-    await ctx.send('@everyone Who wants to play Kart?')
-
+    try:
+        await ctx.send('@everyone Who wants to play Kart?')
+    except Exception as e:
+        print(f"Error sending kart message: {e}")
 
 @bot.command()
 async def smash(ctx):
-    await ctx.send('@everyone Who wants to play Smash?')
-
+    try:
+        await ctx.send('@everyone Who wants to play Smash?')
+    except Exception as e:
+        print(f"Error sending smash message: {e}")
 
 @bot.command()
 async def party(ctx):
-    await ctx.send('@everyone Who wants to play Party?')
+    try:
+        await ctx.send('@everyone Who wants to play Party?')
+    except Exception as e:
+        print(f"Error sending party message: {e}")
+
+# Add error handling for bot events
+@bot.event
+async def on_command_error(ctx, error):
+    """Global error handler for commands"""
+    print(f"An error occurred: {error}")
+    try:
+        if isinstance(error, commands.CommandNotFound):
+            await ctx.send("Sorry, I don't recognize that command.")
+        elif isinstance(error, commands.MissingPermissions):
+            await ctx.send("You don't have permission to use this command.")
+        else:
+            await ctx.send(f"An error occurred: {str(error)}")
+    except Exception as e:
+        print(f"Error in error handler: {e}")
+
+@bot.event
+async def on_error(event, *args, **kwargs):
+    """Global error handler for bot events"""
+    print(f"An error occurred in {event}")
+    print(f"Args: {args}")
+    print(f"Kwargs: {kwargs}")
+
+# Modify bot.run to add more error handling
+def run_bot():
+    try:
+        # Use environment variable or a more secure method to store token
+        TOKEN = 'your bot token'
+        
+        # Add logging
+        import logging
+        logging.basicConfig(level=logging.INFO)
+        
+        # Run the bot with additional error handling
+        bot.run(TOKEN)
+    except discord.LoginFailure:
+        print("Failed to log in. Check your bot token.")
+    except Exception as e:
+        print(f"An error occurred while running the bot: {e}")
+
+# Call run_bot instead of bot.run directly
+if __name__ == '__main__':
+    run_bot()
 
 
 # Run the bot with the token
